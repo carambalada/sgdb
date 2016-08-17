@@ -33,30 +33,44 @@ def get_options(section, inifile):
 #
 # Getting a row from DB
 #
-def sql_get_all(db, st):
+def sql_get(db, st, mode):
  cursor = db.cursor()
 
  try:
   cursor.execute(st)
-  results = cursor.fetchall()
  except:
   print "Error"
+
+ if mode == "all":
+  results = cursor.fetchall()
+ if mode == "one":
+  results = cursor.fetchone()
 
  return results
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
 # Getting domain tail
 #
-def get_domin_tail(db, table, domain_id):
- cursor = db.cursor()
+def get_domain_tail(db, domain_id, tail):
+ st = "SELECT * FROM domain WHERE id=%d" % domain_id
+ row = sql_get(db, st, "one")
 
- try:
-  cursor.execute("SELECT name from %s WHERE id=%d" % (table, domain_id))
-  results = cursor.fetchone()
- except:
-  print "Error"
+ domain_id = row[0]
+ domain_name = row[1]
+ parent_id = row[2]
 
- return results
+ if tail == None:
+  tail = domain_name
+ else:
+  tail = tail + domain_name
+
+ if parent_id != 0:
+  tail = tail + '.' + get_domain_tail(db, parent_id, tail)
+# else:
+  #tail = tail + '.' + domain_name
+#  tail = domain_name
+  
+ return tail
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
 # Getting domain names
@@ -66,7 +80,7 @@ def get_domin_tail(db, table, domain_id):
 # root (bool): include root (first-level) domain names?, i.e. 0 would include "com" in return list
 #
 def get_domain_names(db, table, root):
- rows = sql_get_all(db, "SELECT * FROM %s" % table)
+ rows = sql_get(db, "SELECT * FROM %s" % table)
  for row in rows:
   print "domain: %s%s" % (row[1], get_domain_tail(db, table, row[2]))
   
@@ -84,13 +98,14 @@ if len(sys.argv) != 2:
 dbopt = get_options('db', sys.argv[1])
 db = MySQLdb.connect(dbopt['host'],dbopt['user'],dbopt['pass'],dbopt['name'])
 
-domains = get_domain_names(db, 'domain', 1)
+print get_domain_tail(db, 9, None)
+
+db.close()
 
 """ ldap
 #for row in dmn:
 # print "domain: ", row[0], row[1]
 
-db.close()
 
 
 l = ldap.initialize('ldap://shops.kl.com')
