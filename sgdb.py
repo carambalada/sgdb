@@ -15,6 +15,7 @@
 import os, sys, MySQLdb, ldap
 from ConfigParser import SafeConfigParser
 
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
 # Getting options from ini-file
 #
@@ -31,44 +32,47 @@ def fGetOptions( inifile ):
  opt['name'] = parser.get('db','name')
 
  return opt
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#
+# Getting a row from DB
+#
+def fSQLGetRow( db, st ):
+ cursor = db.cursor()
 
+ try:
+  cursor.execute( st )
+  results = cursor.fetchall()
+ except:
+  print "Error"
+
+ return results
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
 # Main
 #
+"""
 if len(sys.argv) != 2:
  print 'Please specify one inifile on the command line.'
  sys.exit(1)
-else:
- opt = fGetOptions( sys.argv[1] )
 
-print opt['host']
+opt = fGetOptions( sys.argv[1] )
+db = MySQLdb.connect(opt['host'],opt['user'],opt['pass'],opt['name'])
 
-""" sql
-db = MySQLdb.connect("dbhost","dbuser","dbpass","dbname")
-cursor = db.cursor()
-
-sql = "select * from employee"
-
-try:
- cursor.execute(sql)
-# db.commit()
- results = cursor.fetchall()
-
- for row in results:
-  print "fname = row[0]"
-except:
-# db.rollback()
- print "Error"
+dmn = fSQLGetRow( db, "SELECT * FROM dmn" )
+print dmn
+#for row in dmn:
+# print "domain: ", row[0], row[1]
 
 db.close()
 """
 
 """ ldap
+"""
 
-l = ldap.initialize('ldap://')
-binddn = ""
-pw = ""
-basedn = ""
+l = ldap.initialize('ldap://kl.com')
+user = "ldap_query@kl.com"
+pw = "1q2w3e4r5t"
+basedn = "OU=Users (kl.com),DC=kl,DC=com"
 
 searchFilter = "(CN=Сервис.*)"
 searchAttribute = ["postalcode","postofficebox"]
@@ -77,7 +81,7 @@ searchScope = ldap.SCOPE_SUBTREE
 #Bind to the server
 try:
     l.protocol_version = ldap.VERSION3
-    l.simple_bind_s(binddn, pw) 
+    l.simple_bind_s(user, pw) 
 except ldap.INVALID_CREDENTIALS:
   print "Your username or password is incorrect."
   sys.exit(0)
@@ -105,4 +109,3 @@ except ldap.LDAPError, e:
     print e
 
 l.unbind_s()
-"""
