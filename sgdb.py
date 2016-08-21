@@ -12,7 +12,8 @@
 # name = myname
 # --------------------
 
-import os, sys, MySQLdb, ldap
+import os, sys, MySQLdb
+#import ldap
 import ConfigParser
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -49,28 +50,20 @@ def sql_get(db, st, mode):
  return results
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
-# Getting domain tail
+# Assambling a domain name using domain_id
 #
-def get_domain_tail(db, domain_id, tail):
+def complete_domain(db, domain_id):
  st = "SELECT * FROM domain WHERE id=%d" % domain_id
  row = sql_get(db, st, "one")
 
- domain_id = row[0]
  domain_name = row[1]
  parent_id = row[2]
 
- if tail == None:
-  tail = domain_name
+ if parent_id == 0:
+  return domain_name
  else:
-  tail = tail + domain_name
-
- if parent_id != 0:
-  tail = tail + '.' + get_domain_tail(db, parent_id, tail)
-# else:
-  #tail = tail + '.' + domain_name
-#  tail = domain_name
+  return domain_name + '.' + complete_domain(db, parent_id)
   
- return tail
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
 # Getting domain names
@@ -82,10 +75,62 @@ def get_domain_tail(db, domain_id, tail):
 def get_domain_names(db, table, root):
  rows = sql_get(db, "SELECT * FROM %s" % table)
  for row in rows:
-  print "domain: %s%s" % (row[1], get_domain_tail(db, table, row[2]))
+  print "domain: %s%s" % (row[1], complete_domain(db, table, row[2]))
   
  return 
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#
+# Getting groups from LDAP
+#
+def get_ldap_group(db, credential_id, domain_full_name):
+ st = "SELECT login,password FROM credential where id=%s" % credential_id
+ row = sql_get(db, st, 'one')
+
+ ldap_url = "ldap://%s" % domain_full_name
+ login = row[0]
+ password = row[1]
+
+ #l = ldap.initialize(ldap_url)
+"""
+ basedn = "OU=Access groups,DC=kl,DC=com"
+ basedn = "OU=Access groups,DC=shops,DC=kl,DC=com"
+
+ searchFilter = "(CN=3*)"
+ searchAttribute = ["postalcode","postofficebox"]
+ #this will scope the entire subtree under UserUnits
+ searchScope = ldap.SCOPE_SUBTREE
+ #Bind to the server
+ try:
+  l.protocol_version = ldap.VERSION3
+  l.simple_bind_s(user, pw) 
+ except ldap.INVALID_CREDENTIALS:
+  print "Your username or password is incorrect."
+  sys.exit(0)
+ except ldap.LDAPError, e:
+  if type(e.message) == dict and e.message.has_key('desc'):
+      print e.message['desc']
+  else: 
+      print e
+  sys.exit(0)
+
+ try:    
+  ldap_result_id = l.search(basedn, searchScope, searchFilter, searchAttribute, attrsonly=0)
+  result_set = []
+  while 1:
+   result_type, result_data = l.result(ldap_result_id, 0)
+   if (result_data == []):
+    break
+   else:
+    if result_type == ldap.RES_SEARCH_ENTRY:
+     result_set.append(result_data)
+  print "result: ", result_set[0]
  
+ except ldap.LDAPError, e:
+  print e
+
+ l.unbind_s()
+"""
+
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
@@ -98,54 +143,15 @@ if len(sys.argv) != 2:
 dbopt = get_options('db', sys.argv[1])
 db = MySQLdb.connect(dbopt['host'],dbopt['user'],dbopt['pass'],dbopt['name'])
 
-print get_domain_tail(db, 9, None)
+st = "SELECT * FROM domain"
+rows = sql_get(db, st, 'all')
+for row in rows:
+ domain_id = row[0]
+ parent_id = row[2]
+ credential_id = row[3]
+ if parent_id != 0:
+  domain_full_name = complete_domain(db, domain_id)
+  get_ldap_group(db, credential_id, domain_full_name)
 
 db.close()
 
-""" ldap
-#for row in dmn:
-# print "domain: ", row[0], row[1]
-
-
-
-l = ldap.initialize('ldap://shops.kl.com')
-user = "ldap_query@kl.com"
-pw = "1q2w3e4r5t"
-basedn = "OU=Access groups,DC=kl,DC=com"
-basedn = "OU=Access groups,DC=shops,DC=kl,DC=com"
-
-searchFilter = "(CN=3*)"
-searchAttribute = ["postalcode","postofficebox"]
-#this will scope the entire subtree under UserUnits
-searchScope = ldap.SCOPE_SUBTREE
-#Bind to the server
-try:
-    l.protocol_version = ldap.VERSION3
-    l.simple_bind_s(user, pw) 
-except ldap.INVALID_CREDENTIALS:
-  print "Your username or password is incorrect."
-  sys.exit(0)
-except ldap.LDAPError, e:
-  if type(e.message) == dict and e.message.has_key('desc'):
-      print e.message['desc']
-  else: 
-      print e
-  sys.exit(0)
-
-try:    
- ldap_result_id = l.search(basedn, searchScope, searchFilter, searchAttribute, attrsonly=0)
- result_set = []
- while 1:
-  result_type, result_data = l.result(ldap_result_id, 0)
-  if (result_data == []):
-   break
-  else:
-   if result_type == ldap.RES_SEARCH_ENTRY:
-    result_set.append(result_data)
- print "result: ", result_set[0]
- 
-except ldap.LDAPError, e:
-    print e
-
-l.unbind_s()
-"""
