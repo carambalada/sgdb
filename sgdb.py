@@ -80,29 +80,48 @@ def get_domain_names(db, table, root):
  return 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
-# Getting groups from LDAP
+# Getting LDAP credentials
 #
-def get_ldap_group(db, credential_id, domain_full_name):
+def get_ldap_credential(db, credential_id):
  st = "SELECT login,password FROM credential where id=%s" % credential_id
  row = sql_get(db, st, 'one')
 
+ return row
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#
+# Getting groups from LDAP
+#
+def make_basedn(domain_full_name, ou):
+ basedn = ou
+ levels = domain_full_name.split('.')
+ for level in levels:
+  #basedn = basedn + ',DC=' + level
+  basedn += ',DC=' + level
+
+ return basedn
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#
+# Getting groups from LDAP
+#
+def get_ldap_group_from_ou(domain_full_name, credential, ou):
+
  ldap_url = "ldap://%s" % domain_full_name
- login = row[0]
- password = row[1]
+ login = credential[0]
+ password = credential[1]
 
- #l = ldap.initialize(ldap_url)
-"""
- basedn = "OU=Access groups,DC=kl,DC=com"
- basedn = "OU=Access groups,DC=shops,DC=kl,DC=com"
+ 
+ basedn = make_basedn(domain_full_name, ou)
 
- searchFilter = "(CN=3*)"
- searchAttribute = ["postalcode","postofficebox"]
+ l = ldap.initialize(ldap_url)
+
+ searchFilter = "(CN=*)"
+ searchAttribute = ["cn"]
  #this will scope the entire subtree under UserUnits
  searchScope = ldap.SCOPE_SUBTREE
  #Bind to the server
  try:
   l.protocol_version = ldap.VERSION3
-  l.simple_bind_s(user, pw) 
+  l.simple_bind_s(login, password) 
  except ldap.INVALID_CREDENTIALS:
   print "Your username or password is incorrect."
   sys.exit(0)
@@ -129,9 +148,6 @@ def get_ldap_group(db, credential_id, domain_full_name):
   print e
 
  l.unbind_s()
-"""
-
-
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
 # Main
@@ -151,7 +167,8 @@ for row in rows:
  credential_id = row[3]
  if parent_id != 0:
   domain_full_name = complete_domain(db, domain_id)
-  get_ldap_group(db, credential_id, domain_full_name)
+  credential = get_ldap_credential(db, credential_id)
+  get_ldap_group_from_ou(domain_full_name, credential, "OU=Access groups")
 
 db.close()
 
