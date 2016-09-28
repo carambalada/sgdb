@@ -13,7 +13,7 @@
 # --------------------
 
 import os, sys, MySQLdb
-#import ldap
+import ldap
 import ConfigParser
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -50,36 +50,6 @@ def sql_get(db, st, mode):
  return results
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
-# Assambling a domain name using domain_id
-#
-def complete_domain(db, domain_id):
- st = "SELECT * FROM domain WHERE id=%d" % domain_id
- row = sql_get(db, st, "one")
-
- domain_name = row[1]
- parent_id = row[2]
-
- if parent_id == 0:
-  return domain_name
- else:
-  return domain_name + '.' + complete_domain(db, parent_id)
-  
-# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-#
-# Getting domain names
-#
-# db = db link
-# table: table name
-# root (bool): include root (first-level) domain names?, i.e. 0 would include "com" in return list
-#
-def get_domain_names(db, table, root):
- rows = sql_get(db, "SELECT * FROM %s" % table)
- for row in rows:
-  print "domain: %s%s" % (row[1], complete_domain(db, table, row[2]))
-  
- return 
-# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-#
 # Getting LDAP credentials
 #
 def get_ldap_credential(db, credential_id):
@@ -89,65 +59,95 @@ def get_ldap_credential(db, credential_id):
  return row
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
-# Getting groups from LDAP
+# Getting first CN from a DN
+# ?
 #
-def make_basedn(domain_full_name, ou):
- basedn = ou
- levels = domain_full_name.split('.')
- for level in levels:
-  #basedn = basedn + ',DC=' + level
-  basedn += ',DC=' + level
+def get_cn(dn):
+ # CN=3 Extend,OU=internet access [3],OU=Access groups,DC=kl,DC=com
+ _fromSym = '='
+ _toSym = ','
 
- return basedn
+ _from = dn.find(_fromSym) + 1
+ _to = dn.find(_toSym)
+
+ dn = dn[_from:_to]
+
+ return dn
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
-# Getting groups from LDAP
+# Getting LDAP bind instance
 #
-def get_ldap_group_from_ou(domain_full_name, credential, ou):
+def get_ldap_bind(domain):
 
- ldap_url = "ldap://%s" % domain_full_name
- login = credential[0]
- password = credential[1]
+ if not ldap_bind.has_key(domain):
+  url = "ldap://%s" % domain
+  login = credential[0]
+  password = credential[1]
+  ldap_connection = ldap.initialize(url)
 
- 
- basedn = make_basedn(domain_full_name, ou)
+  try:
+   ldap_connection.protocol_version = ldap.VERSION3
+   ldap_connection.simple_bind_s(login, password) 
+   ldap_bind[domain] = ldap_connection;
 
- l = ldap.initialize(ldap_url)
+  except ldap.LDAPError, e:
+   if type(e.message) == dict and e.message.has_key('desc'):
+    print e.message['desc']
+   else: 
+    print e
+   sys.exit(0)
 
- searchFilter = "(CN=*)"
- searchAttribute = ["cn"]
- #this will scope the entire subtree under UserUnits
- searchScope = ldap.SCOPE_SUBTREE
- #Bind to the server
- try:
-  l.protocol_version = ldap.VERSION3
-  l.simple_bind_s(login, password) 
- except ldap.INVALID_CREDENTIALS:
-  print "Your username or password is incorrect."
-  sys.exit(0)
- except ldap.LDAPError, e:
-  if type(e.message) == dict and e.message.has_key('desc'):
-      print e.message['desc']
-  else: 
-      print e
-  sys.exit(0)
+ return ldap_bind[domain]
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#
+# Getting LDAP object property
+#
+def get_ldap_obj_prop(dn, attr):
+
+ domain = get_domain_name_from_dn(dn)
+ bind = get_ldap_bind(domain)
+ searchScope = ldap.SCOPE_BASE
+ searchFilter = "(objectClass=*)"
+ # we have to request a list of attribures
 
  try:    
-  ldap_result_id = l.search(basedn, searchScope, searchFilter, searchAttribute, attrsonly=0)
-  result_set = []
-  while 1:
-   result_type, result_data = l.result(ldap_result_id, 0)
-   if (result_data == []):
-    break
-   else:
-    if result_type == ldap.RES_SEARCH_ENTRY:
-     result_set.append(result_data)
-  print "result: ", result_set[0]
- 
+  ldap_result_id = bind.search(dn, searchScope, searchFilter, [attr], attrsonly=0)
+  result_type, result_data = bind.result(ldap_result_id, 0, 10)
  except ldap.LDAPError, e:
   print e
 
- l.unbind_s()
+ #
+ # result_data[0] is the first element of the list-result. Since search scope is
+ # SCOPE_BASE there is only one element in the list.
+ # result_data[0] is the DN of the object
+ # result_data[1] is a dictionary with keys as in the searched attribute list. 
+ # We've got just one key - the searched attribute
+ #
+ attr_value = result_data[0][1][attr]
+ return attr_value
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#
+# Getting a domain-name-part from a DN
+#
+def get_domain_name_from_dn(dn):
+
+ fromSym = 'DC'
+ fromNum = dn.find(fromSym)
+ string = dn[fromNum:]
+ parts = string.split(',')
+ fromSym = '='
+ string = ''
+
+ for part in parts:
+  fromNum = part.find(fromSym) + 1
+  if string:
+   string += '.' + part[fromNum:]
+  else:
+   string = part[fromNum:]
+
+ return string
+
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
 # Main
@@ -159,16 +159,19 @@ if len(sys.argv) != 2:
 dbopt = get_options('db', sys.argv[1])
 db = MySQLdb.connect(dbopt['host'],dbopt['user'],dbopt['pass'],dbopt['name'])
 
-st = "SELECT * FROM domain"
+attr = 'member'
+credential = get_ldap_credential(db, 1)
+ldap_bind = {}
+
+st = "SELECT * FROM dn"
 rows = sql_get(db, st, 'all')
 for row in rows:
- domain_id = row[0]
- parent_id = row[2]
- credential_id = row[3]
- if parent_id != 0:
-  domain_full_name = complete_domain(db, domain_id)
-  credential = get_ldap_credential(db, credential_id)
-  get_ldap_group_from_ou(domain_full_name, credential, "OU=Access groups")
+ dn_id = row[0]
+ dn = row[1]
+ group_member = get_ldap_obj_prop(dn, attr)
+ print dn
+ for member in group_member:
+  userPrincipalName = get_ldap_obj_prop(member, 'userPrincipalName')
+  print userPrincipalName[0]
 
 db.close()
-
