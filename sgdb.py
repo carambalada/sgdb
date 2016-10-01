@@ -32,15 +32,18 @@ def get_options(section, inifile):
  return options
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
-# Getting a row from DB
+# Getting data from the DB
 #
-def sql_get(db, st, mode):
+def sql_get(st, mode):
  cursor = db.cursor()
 
  try:
   cursor.execute(st)
- except:
-  print "Error"
+ except MySQLdb.Error, e:
+  try:
+   print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
+  except IndexError:
+   print "MySQL Error: %s" % str(e)
 
  if mode == "all":
   results = cursor.fetchall()
@@ -50,27 +53,46 @@ def sql_get(db, st, mode):
  return results
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
+# Inserting data to the DB
+#
+def sql_set(st):
+ cursor = db.cursor()
+
+ try:
+  cursor.execute(st)
+ except MySQLdb.Error, e:
+  try:
+   print "MySQL Error [%d]: %s" % (e.args[0], e.args[1])
+  except IndexError:
+   print "MySQL Error: %s" % str(e)
+ 
+ db.commit()
+ lastrowid = cursor.lastrowid
+
+ return lastrowid
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#
 # Getting LDAP credentials
 #
-def get_ldap_credential(db, credential_id):
- st = "SELECT login,password FROM credential where id=%s" % credential_id
- row = sql_get(db, st, 'one')
+def get_ldap_credential(credential_id):
+ st = 'SELECT login,password FROM credential where id=' + str(credential_id)
+ row = sql_get(st, 'one')
 
  return row
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
 # Getting first CN from a DN
-# ?
+# DN example: CN=3 Extend,OU=internet access [3],OU=Access groups,DC=kl,DC=com
 #
 def get_cn(dn):
- # CN=3 Extend,OU=internet access [3],OU=Access groups,DC=kl,DC=com
- _fromSym = '='
- _toSym = ','
+ fromSym = '='
+ toSym = ','
 
- _from = dn.find(_fromSym) + 1
- _to = dn.find(_toSym)
+ fromNum = dn.find(fromSym) + 1
+ toNum = dn.find(toSym)
 
- dn = dn[_from:_to]
+ dn = dn[fromNum:toNum]
 
  return dn
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -78,7 +100,6 @@ def get_cn(dn):
 # Getting LDAP bind instance
 #
 def get_ldap_bind(domain):
-
  if not ldap_bind.has_key(domain):
   url = "ldap://%s" % domain
   login = credential[0]
@@ -98,12 +119,12 @@ def get_ldap_bind(domain):
    sys.exit(0)
 
  return ldap_bind[domain]
+
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
 # Getting LDAP object property
 #
 def get_ldap_obj_prop(dn, attr):
-
  domain = get_domain_name_from_dn(dn)
  bind = get_ldap_bind(domain)
  searchScope = ldap.SCOPE_BASE
@@ -131,7 +152,6 @@ def get_ldap_obj_prop(dn, attr):
 # Getting a domain-name-part from a DN
 #
 def get_domain_name_from_dn(dn):
-
  fromSym = 'DC'
  fromNum = dn.find(fromSym)
  string = dn[fromNum:]
@@ -150,28 +170,76 @@ def get_domain_name_from_dn(dn):
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
+# Getting ID of the security group from the DB
+#
+def get_group_id(group):
+ st = 'SELECT id FROM cn where name="' + group + '"'
+ value = sql_get(st, 'one')
+
+ if (value):
+  value = value[0]
+ else:
+  st = 'INSERT INTO cn (name) value ("' + group + '")'
+  value = sql_set(st)
+
+ return value
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#
+# Check wether the principal in the DB or not
+#
+def check_user(user, group_id):
+ st = 'SELECT name FROM principal WHERE name="' + user + '" and group_id=' + str(group_id)
+ value = sql_get(st, 'one')
+
+ return value
+  
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#
 # Main
 #
 if len(sys.argv) != 2:
  print 'Please specify one inifile on the command line.'
  sys.exit(1)
 
+debug = 2
+
 dbopt = get_options('db', sys.argv[1])
 db = MySQLdb.connect(dbopt['host'],dbopt['user'],dbopt['pass'],dbopt['name'])
 
-attr = 'member'
-credential = get_ldap_credential(db, 1)
+credential = get_ldap_credential(1)
 ldap_bind = {}
 
 st = "SELECT * FROM dn"
-rows = sql_get(db, st, 'all')
+rows = sql_get(st, 'all')
+attr = 'member'
+
 for row in rows:
  dn_id = row[0]
- dn = row[1]
+ dn = row[2]
+ group = get_cn(dn)
+ group_id = get_group_id(group)
  group_member = get_ldap_obj_prop(dn, attr)
- print dn
+
+ st = 'UPDATE principal SET dn_id=NULL WHERE dn_id=' + str(dn_id)
+ sql_set(st)
+
  for member in group_member:
-  userPrincipalName = get_ldap_obj_prop(member, 'userPrincipalName')
-  print userPrincipalName[0]
+  user = get_ldap_obj_prop(member, 'userPrincipalName')
+  user = user[0]
+
+  if check_user(user, group_id):
+   print 'The principal is found: ' + user
+   st = 'UPDATE principal SET dn_id=' + str(dn_id) + ' WHERE name="' + user + '" and group_id=' + str(group_id)
+   sql_set(st)
+
+  else:
+   print 'The new principal should be inserted: ' + user
+   st = 'INSERT INTO principal (group_id,dn_id,name) value (' + str(group_id) + ','+ str(dn_id) + ',"' + user + '")'
+   sql_set(st)
+
+
+ st = 'UPDATE dn SET stamp=NOW() WHERE id=' + str(dn_id)
+ sql_set(st)
 
 db.close()
