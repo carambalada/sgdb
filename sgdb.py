@@ -10,11 +10,14 @@
 # user = myuser
 # pass = mypass
 # name = myname
+# [dump]
+# directory = /path/to/the/principal/dump
 # --------------------
 
 import os, sys, MySQLdb
 import ldap
 import ConfigParser
+from subprocess import call
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
@@ -196,16 +199,81 @@ def check_user(user, group_id):
   
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 #
+# Updating data in the DB
+#
+def update_db(rows,attr):
+ for row in rows:
+  dn_id = row[0]
+  dn = row[2]
+  group = get_cn(dn)
+  group_id = get_group_id(group)
+  group_member = get_ldap_obj_prop(dn, attr)
+
+  #print 'Processing DN: ' + dn
+
+  st = 'UPDATE principal SET dn_id=NULL WHERE dn_id=' + str(dn_id)
+  sql_set(st)
+
+  count = 0
+
+  for member in group_member:
+   user = get_ldap_obj_prop(member, 'userPrincipalName')
+   user = user[0]
+
+   if check_user(user, group_id):
+    st = 'UPDATE principal SET dn_id=' + str(dn_id) + ' WHERE name="' + user + '" and group_id=' + str(group_id)
+    sql_set(st)
+
+   else:
+    st = 'INSERT INTO principal (group_id,dn_id,name) value (' + str(group_id) + ','+ str(dn_id) + ',"' + user + '")'
+    sql_set(st)
+
+   count += 1
+
+  #print ' Number of members: ' + str(count)
+
+  st = 'UPDATE dn SET stamp=NOW() WHERE id=' + str(dn_id)
+  sql_set(st)
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#
+# Cleaning DB by removing records where dn_id = NULL
+#
+def clean_db():
+ st = 'DELETE FROM principal WHERE dn_id is NULL'
+ sql_set(st)
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#
+# Making text files with principals
+#
+def dump_principals(rows, directory):
+ for row in rows:
+  group_id = row[0]
+  group = row[1]
+
+  st = 'SELECT name FROM principal WHERE group_id=' + str(group_id)
+  principal_list = sql_get(st,'all')
+
+  filename = directory + '/' + group
+  fh = open(filename, 'w')
+
+  for principal in principal_list:
+   fh.write(principal[0] + '\n')
+  fh.close()
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#
 # Main
 #
 if len(sys.argv) != 2:
  print 'Please specify one inifile on the command line.'
  sys.exit(1)
 
-debug = 2
+config = sys.argv[1]
 
-dbopt = get_options('db', sys.argv[1])
-db = MySQLdb.connect(dbopt['host'],dbopt['user'],dbopt['pass'],dbopt['name'])
+db_opt = get_options('db', config)
+db = MySQLdb.connect(db_opt['host'], db_opt['user'], db_opt['pass'], db_opt['name'])
 
 credential = get_ldap_credential(1)
 ldap_bind = {}
@@ -213,33 +281,18 @@ ldap_bind = {}
 st = "SELECT * FROM dn"
 rows = sql_get(st, 'all')
 attr = 'member'
+update_db(rows, attr)
 
-for row in rows:
- dn_id = row[0]
- dn = row[2]
- group = get_cn(dn)
- group_id = get_group_id(group)
- group_member = get_ldap_obj_prop(dn, attr)
+clean_db()
 
- st = 'UPDATE principal SET dn_id=NULL WHERE dn_id=' + str(dn_id)
- sql_set(st)
-
- for member in group_member:
-  user = get_ldap_obj_prop(member, 'userPrincipalName')
-  user = user[0]
-
-  if check_user(user, group_id):
-   print 'The principal is found: ' + user
-   st = 'UPDATE principal SET dn_id=' + str(dn_id) + ' WHERE name="' + user + '" and group_id=' + str(group_id)
-   sql_set(st)
-
-  else:
-   print 'The new principal should be inserted: ' + user
-   st = 'INSERT INTO principal (group_id,dn_id,name) value (' + str(group_id) + ','+ str(dn_id) + ',"' + user + '")'
-   sql_set(st)
-
-
- st = 'UPDATE dn SET stamp=NOW() WHERE id=' + str(dn_id)
- sql_set(st)
+st = "SELECT * FROM cn"
+rows = sql_get(st, 'all')
+path_opt = get_options('path', config)
+directory = path_opt['users']
+dump_principals(rows, directory)
 
 db.close()
+
+archive = path_opt['archive']
+call(["tar", "-cf", archive, "-C", directory, "."])
+
